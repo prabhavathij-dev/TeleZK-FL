@@ -9,32 +9,23 @@ class Quantizer:
         self.q_min = -(2**(bits - 1))
         self.q_max = 2**(bits - 1) - 1
         
-    def quantize(self, tensor):
-        # quantize fp tensor to int8
-        if isinstance(tensor, torch.Tensor):
-            data = tensor.detach().cpu().numpy()
-        else:
-            data = tensor
-            
-        data_min = data.min()
-        data_max = data.max()
+    def quantize_layer(self, weights):
+        w_min, w_max = np.min(weights), np.max(weights)
+        if w_min == w_max:
+            return np.zeros_like(weights, dtype=np.int8), 1.0, 0
         
-        # calc scale/zero-point
-        # FIXME: symmetric quantization is naive, consider affine for better precision
-        max_abs = max(abs(data_min), abs(data_max))
-        if max_abs == 0:
-            return np.zeros_like(data, dtype=np.int8), 1.0
+        scale = (w_max - w_min) / (127 - (-128))
+        zero_point = np.round((0 - w_min) / scale) + (-128)
+        zero_point = np.clip(zero_point, -128, 127)
         
-        scale = max_abs / self.q_max
+        q_weights = np.round(weights / scale) + zero_point
+        q_weights = np.clip(q_weights, -128, 127).astype(np.int8)
         
-        quantized = np.round(data / scale).astype(np.int8)
-        quantized = np.clip(quantized, self.q_min, self.q_max)
-        
-        return quantized, scale
+        return q_weights, scale, int(zero_point)
 
-    def dequantize(self, quantized, scale):
-        # dequantize to float32
-        return (quantized.astype(np.float32) * scale)
+    def dequantize(self, quantized, scale, zero_point):
+        # dequantize using affine formula: (q - zp) * scale
+        return (quantized.astype(np.float32) - zero_point) * scale
 
     def get_size_reduction(self, tensor):
         # theoretical size reduction factor
