@@ -7,28 +7,30 @@ class FLServer:
         self.global_model = model
         self.quantizer = Quantizer()
         
-    def aggregate(self, client_updates, client_scales):
-        # aggregate updates
-        new_weights = {}
+    def aggregate(self, client_updates, client_scales, client_zero_points):
+        # aggregate updates (deltas)
+        new_deltas = {}
         
-        # init weights containers
+        # init deltas containers
         for name, param in self.global_model.named_parameters():
-            new_weights[name] = np.zeros_like(param.data.cpu().numpy())
+            new_deltas[name] = np.zeros_like(param.data.cpu().numpy())
             
         # dequantize & sum
         num_clients = len(client_updates)
         for i in range(num_clients):
             updates = client_updates[i]
             scales = client_scales[i]
+            zps = client_zero_points[i]
             
             for name in updates:
-                dequantized = self.quantizer.dequantize(updates[name], scales[name])
-                new_weights[name] += dequantized
+                dequantized = self.quantizer.dequantize(updates[name], scales[name], zps[name])
+                new_deltas[name] += dequantized
                 
-        # average over clients
+        # average over clients and apply to global model
         for name, param in self.global_model.named_parameters():
-            averaged_weights = new_weights[name] / num_clients
-            param.data = torch.from_numpy(averaged_weights)
+            averaged_delta = new_deltas[name] / num_clients
+            # apply delta update: W = W + Delta_avg
+            param.data += torch.from_numpy(averaged_delta)
             
     def get_model(self):
         return self.global_model

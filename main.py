@@ -27,6 +27,7 @@ def run_simulation():
         print(f"\n--- Round {r+1}/{num_rounds} ---")
         client_updates = []
         client_scales = []
+        client_zero_points = []
         client_proofs = []
         
         for c in range(num_clients):
@@ -43,17 +44,18 @@ def run_simulation():
             _ = client.train(epochs=1)
             
             # get quant updates & proof
-            updates, scales = client.get_updates()
+            updates, scales, zero_points = client.get_updates()
             proof = client.generate_proof()
             
             client_updates.append(updates)
             client_scales.append(scales)
+            client_zero_points.append(zero_points)
             client_proofs.append(proof)
             print(f"  Client {c} trained and quantized INT8 updates.")
             
         # Server Aggregation
         if server.verify_proofs(client_proofs):
-            server.aggregate(client_updates, client_scales)
+            server.aggregate(client_updates, client_scales, client_zero_points)
             print("  Server verified proofs and aggregated updates.")
         else:
             print("  Server failed to verify ZK proofs!")
