@@ -21,6 +21,7 @@ class FLClient:
         self.quantizer = Quantizer()
         
     def train(self, epochs=1):
+        self.global_weights = {name: param.data.clone() for name, param in self.model.named_parameters()}
         self.model.train()
         optimizer = optim.SGD(self.model.parameters(), lr=0.01)
         criterion = nn.BCELoss()
@@ -41,14 +42,18 @@ class FLClient:
         # quantize model weights for transmission
         updates = {}
         scales = {}
+        zero_points = {}
         
         for name, param in self.model.named_parameters():
-            # TODO: send diff from global model instead of absolute weights
-            q_data, scale = self.quantizer.quantize(param.data)
+            delta_w = param.data - self.global_weights[name]
+            if isinstance(delta_w, torch.Tensor):
+                delta_w = delta_w.cpu().numpy()
+            q_data, scale, zero_point = self.quantizer.quantize_layer(delta_w)
             updates[name] = q_data
             scales[name] = scale
+            zero_points[name] = zero_point
             
-        return updates, scales
+        return updates, scales, zero_points
 
     def generate_proof(self):
         # simulate zkp generation (placeholder)
