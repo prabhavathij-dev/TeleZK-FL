@@ -1,5 +1,40 @@
+# Data (too large for git)
+data/
+*.zip
+
+# Results logs (regeneratable)
+results/logs/
+results/figures/
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Environment
 .env
 venv/
-*.png
+*.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# PyTorch
+*.pt
+*.pth
+*.ckpt
+
+# Local Agent and Task Files
+.agents/
+TeleZK*.md
+
