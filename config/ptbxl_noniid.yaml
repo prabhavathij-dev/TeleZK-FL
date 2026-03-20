@@ -1,0 +1,56 @@
+# PTB-XL Non-IID Configuration
+dataset:
+  name: ptbxl
+  data_dir: data/ptbxl
+  sampling_rate: 100
+  num_classes: 5
+  superclasses:
+    - NORM
+    - MI
+    - STTC
+    - CD
+    - HYP
+
+model:
+  name: mobilenetv2_1d
+  pretrained: false
+  in_channels: 12
+  seq_length: 1000
+  num_params_approx: 2100000
+
+federated:
+  num_clients: 10
+  num_rounds: 50
+  local_epochs: 5
+  participation_rate: 1.0
+  partition: dirichlet
+  dirichlet_alpha: 0.5
+  aggregation: fedavg
+
+training:
+  optimizer: adam
+  learning_rate: 0.0001
+  batch_size: 32
+  loss: bce
+
+quantization:
+  enabled: true
+  bits: 8
+  scheme: symmetric
+  per_channel: true
+
+zkp:
+  enabled: true
+  l_inf_bound: 1.0
+  lut_bits: 8
+
+hardware:
+  simulate_rpi4: true
+  num_cores: 4
+  memory_limit_gb: 4
+  freq_scale_factor: 2.3
+
+experiment:
+  seeds: [42, 123, 456]
+  save_per_round: true
+  output_dir: results/logs

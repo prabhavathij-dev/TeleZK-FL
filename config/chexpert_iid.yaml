@@ -1,0 +1,54 @@
+# CheXpert IID Configuration
+dataset:
+  name: chexpert
+  data_dir: data/chexpert/CheXpert-v1.0-small
+  label_csv: data/chexpert/train_cheXbert.csv
+  image_size: 224
+  num_classes: 5
+  pathologies:
+    - Atelectasis
+    - Cardiomegaly
+    - Consolidation
+    - Edema
+    - Pleural Effusion
+
+model:
+  name: mobilenetv2_2d
+  pretrained: true
+  num_params_approx: 3400000
+
+federated:
+  num_clients: 10
+  num_rounds: 50
+  local_epochs: 5
+  participation_rate: 1.0
+  partition: iid
+  aggregation: fedavg
+
+training:
+  optimizer: adam
+  learning_rate: 0.0001
+  batch_size: 32
+  loss: bce
+
+quantization:
+  enabled: true
+  bits: 8
+  scheme: symmetric
+  per_channel: true
+
+zkp:
+  enabled: true
+  l_inf_bound: 1.0
+  lut_bits: 8
+
+hardware:
+  simulate_rpi4: true
+  num_cores: 4
+  memory_limit_gb: 4
+  freq_scale_factor: 2.3
+
+experiment:
+  seeds: [42, 123, 456]
+  save_per_round: true
+  output_dir: results/logs

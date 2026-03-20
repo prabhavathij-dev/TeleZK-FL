@@ -1,0 +1,720 @@
+# TeleZK-FL v2: Phase 2 — Running Experiments & Paper Preparation
+## Steps 27–40 for Antigravity Coding Tool
+
+> **Where we are**: All 26 code steps are implemented. The project structure is complete, imports resolve, LUT builds correctly, and `main.py --help` works. Now we need to actually run experiments on real data, collect results, fix any runtime issues, and generate the final paper figures and tables.
+
+> **Datasets must be in place before proceeding**:
+> - `data/chexpert/CheXpert-v1.0-small/` with train/ and valid/ directories
+> - `data/chexpert/train_cheXbert.csv` 
+> - `data/ptbxl/` with records100/, ptbxl_database.csv, scp_statements.csv
+
+---
+
+## STEP 27: Smoke Test — Verify Data Loading
+
+Before running any experiment, verify both datasets load correctly. Create and run `tests/test_data_loading.py`:
+
+```python
+"""
+Smoke test: verify both datasets load without errors.
+Run: python tests/test_data_loading.py
+"""
+
+# Test 1: CheXpert
+print("=" * 60)
+print("TEST 1: CheXpert Dataset Loading")
+print("=" * 60)
+
+from src.data.chexpert_loader import get_chexpert_train_test
+
+try:
+    train_ds, test_ds = get_chexpert_train_test(
+        data_dir='data/chexpert/CheXpert-v1.0-small',
+        label_csv='data/chexpert/train_cheXbert.csv'
+    )
+    print(f"  Train samples: {len(train_ds)}")
+    print(f"  Test samples:  {len(test_ds)}")
+    
+    # Load one sample
+    img, label = train_ds[0]
+    print(f"  Image shape:   {img.shape}")    # Expected: (3, 224, 224)
+    print(f"  Label shape:   {label.shape}")   # Expected: (5,)
+    print(f"  Label values:  {label.tolist()}")
+    print(f"  Image dtype:   {img.dtype}")
+    print("  ✓ CheXpert loading OK")
+except Exception as e:
+    print(f"  ✗ CheXpert FAILED: {e}")
+    import traceback; traceback.print_exc()
+
+# Test 2: PTB-XL
+print("\n" + "=" * 60)
+print("TEST 2: PTB-XL Dataset Loading")
+print("=" * 60)
+
+from src.data.ptbxl_loader import get_ptbxl_train_test
+
+try:
+    train_ds, test_ds = get_ptbxl_train_test(
+        data_dir='data/ptbxl',
+        sampling_rate=100
+    )
+    print(f"  Train samples: {len(train_ds)}")
+    print(f"  Test samples:  {len(test_ds)}")
+    
+    signal, label = train_ds[0]
+    print(f"  Signal shape:  {signal.shape}")   # Expected: (12, 1000)
+    print(f"  Label shape:   {label.shape}")    # Expected: (5,)
+    print(f"  Label values:  {label.tolist()}")
+    print(f"  Signal range:  [{signal.min():.3f}, {signal.max():.3f}]")
+    print("  ✓ PTB-XL loading OK")
+except Exception as e:
+    print(f"  ✗ PTB-XL FAILED: {e}")
+    import traceback; traceback.print_exc()
+
+# Test 3: Data Partitioning
+print("\n" + "=" * 60)
+print("TEST 3: Data Partitioning")
+print("=" * 60)
+
+from src.data.partition import partition_iid, partition_dirichlet
+
+try:
+    # Test IID
+    iid_splits = partition_iid(train_ds, num_clients=10, seed=42)
+    print(f"  IID: {len(iid_splits)} clients")
+    print(f"  Samples per client: {[len(s) for s in iid_splits]}")
+    
+    # Test Dirichlet
+    dir_splits = partition_dirichlet(train_ds, num_clients=10, alpha=0.5, seed=42)
+    print(f"  Dirichlet: {len(dir_splits)} clients")
+    print(f"  Samples per client: {[len(s) for s in dir_splits]}")
+    print("  ✓ Partitioning OK")
+except Exception as e:
+    print(f"  ✗ Partitioning FAILED: {e}")
+    import traceback; traceback.print_exc()
+
+# Test 4: Models
+print("\n" + "=" * 60)
+print("TEST 4: Model Forward Pass")
+print("=" * 60)
+
+import torch
+from src.models.mobilenetv2_2d import get_mobilenetv2_2d
+from src.models.mobilenetv2_1d import get_ptbxl_model
+
+try:
+    # 2D model
+    model_2d = get_mobilenetv2_2d(num_classes=5, pretrained=False)
+    dummy_img = torch.randn(2, 3, 224, 224)
+    out_2d = model_2d(dummy_img)
+    params_2d = sum(p.numel() for p in model_2d.parameters())
+    print(f"  MobileNetV2-2D: {params_2d:,} params, output={out_2d.shape}")
+    
+    # 1D model
+    model_1d = get_ptbxl_model(num_classes=5)
+    dummy_ecg = torch.randn(2, 12, 1000)
+    out_1d = model_1d(dummy_ecg)
+    params_1d = sum(p.numel() for p in model_1d.parameters())
+    print(f"  MobileNetV2-1D: {params_1d:,} params, output={out_1d.shape}")
+    print("  ✓ Models OK")
+except Exception as e:
+    print(f"  ✗ Models FAILED: {e}")
+    import traceback; traceback.print_exc()
+
+# Test 5: Quantization + LUT
+print("\n" + "=" * 60)
+print("TEST 5: Quantization + LUT")
+print("=" * 60)
+
+from src.quantization.ptq import quantize_model_delta, dequantize_model_delta
+from src.quantization.lut_builder import build_int8_multiplication_lut
+
+try:
+    lut_array, lut_set = build_int8_multiplication_lut()
+    print(f"  LUT entries: {len(lut_set)}")
+    
+    # Test quantization round-trip
+    dummy_delta = {'layer1.weight': torch.randn(64, 32) * 0.01}
+    q_delta, scales, zps = quantize_model_delta(dummy_delta)
+    deq_delta = dequantize_model_delta(q_delta, scales, zps)
+    mse = (dummy_delta['layer1.weight'] - deq_delta['layer1.weight']).pow(2).mean()
+    print(f"  Quantization round-trip MSE: {mse:.8f}")
+    print("  ✓ Quantization OK")
+except Exception as e:
+    print(f"  ✗ Quantization FAILED: {e}")
+    import traceback; traceback.print_exc()
+
+# Test 6: ZK Prover
+print("\n" + "=" * 60)
+print("TEST 6: ZK Proof Generation")
+print("=" * 60)
+
+from src.zkp.prover import TeleZKProver
+
+try:
+    prover = TeleZKProver(lut_set=lut_set, l_inf_bound=1.0)
+    proof = prover.generate_proof(q_delta)
+    print(f"  Proof valid: {proof.is_valid}")
+    print(f"  Proof time:  {proof.total_time*1000:.2f} ms")
+    print(f"  Ops checked: {proof.num_operations_checked}")
+    print("  ✓ ZK Prover OK")
+except Exception as e:
+    print(f"  ✗ ZK Prover FAILED: {e}")
+    import traceback; traceback.print_exc()
+
+print("\n" + "=" * 60)
+print("ALL SMOKE TESTS COMPLETE")
+print("=" * 60)
+```
+
+Run this and fix ANY errors before proceeding. Common issues:
+- File path mismatches (CSV column names differ from expected)
+- Image loading failures (corrupted files in CheXpert)
+- wfdb format issues with PTB-XL
+- Shape mismatches in the 1D MobileNetV2
+
+Do not proceed to Step 28 until all 6 tests pass.
+
+---
+
+## STEP 28: Fix Common Runtime Issues
+
+After running the smoke test, you will likely encounter some of these issues. Here are the fixes to apply:
+
+### Issue A: CheXpert CSV column name mismatch
+The `train_cheXbert.csv` may use different column names than expected. Check with:
+```python
+import pandas as pd
+df = pd.read_csv('data/chexpert/train_cheXbert.csv')
+print(df.columns.tolist())
+```
+If the Path column is named differently, or pathology columns use different capitalization, update `chexpert_loader.py` to match.
+
+### Issue B: CheXpert image path resolution
+The CSV may contain paths like `CheXpert-v1.0-small/train/patient00001/...` but your data_dir already points to `CheXpert-v1.0-small/`. You need to strip the prefix or adjust the path joining logic. Test with:
+```python
+import os
+row_path = df.iloc[0]['Path']  # Check what this looks like
+full_path = os.path.join(data_dir, row_path)
+print(f"Exists: {os.path.exists(full_path)}, Path: {full_path}")
+```
+
+### Issue C: PTB-XL wfdb file loading
+The `wfdb.rdsamp()` function expects the path WITHOUT the file extension. If your ptbxl_database.csv has `filename_lr` values like `records100/00001_lr`, the full call should be:
+```python
+wfdb.rdsamp(os.path.join(data_dir, filename_lr))  # NO .dat or .hea extension
+```
+
+### Issue D: Memory issues with PTB-XL
+Loading all 21,837 ECG signals into memory at once may use 5-10GB RAM. If memory is tight, implement lazy loading:
+```python
+def __getitem__(self, idx):
+    # Load signal on-the-fly instead of pre-loading all
+    signal, _ = wfdb.rdsamp(self.file_paths[idx])
+    signal = torch.FloatTensor(signal).T
+    label = torch.FloatTensor(self.labels[idx])
+    return signal, label
+```
+
+### Issue E: MobileNetV2-1D dimension mismatch
+If the 1D model produces wrong output dimensions, the issue is usually in the adaptive pooling or classifier. Verify:
+```python
+model = get_ptbxl_model()
+x = torch.randn(1, 12, 1000)
+# Add print statements in forward() to trace shapes through each block
+```
+
+### Issue F: CUDA out of memory
+If using GPU, MobileNetV2 with batch_size=32 on 224x224 images needs ~4GB VRAM. Reduce batch_size to 16 or 8 if needed. For PTB-XL (1D, smaller), batch_size=32 should be fine.
+
+Apply all necessary fixes, then re-run the smoke test until all 6 tests pass with green checkmarks.
+
+---
+
+## STEP 29: Run the Standard FL Baseline (No Quantization, No ZK)
+
+Before running TeleZK-FL, first establish the Standard FL baseline numbers. This gives you the "upper bound" AUC to compare against.
+
+Create `experiments/run_baseline.py`:
+
+```
+Purpose: Run Standard FedAvg WITHOUT quantization and WITHOUT ZK proofs.
+This produces the "Standard FL (Baseline)" row in Table 1 of the paper.
+
+Configuration:
+- Same as chexpert_iid.yaml but with:
+  quantization.enabled = false
+  zkp.enabled = false
+- Run for both datasets (CheXpert, PTB-XL)
+- Run for both partitions (IID, non-IID)
+- 3 seeds each
+
+Modify the trainer to support a "baseline" mode:
+- Skip quantization step (transmit FP32 deltas directly)
+- Skip proof generation
+- Server aggregates without verification
+
+Save results to: results/logs/baseline_{dataset}_{partition}_{seed}.json
+
+Expected baseline AUC (approximate):
+- CheXpert IID: ~0.85-0.87
+- CheXpert non-IID: ~0.82-0.85
+- PTB-XL IID: ~0.88-0.90
+- PTB-XL non-IID: ~0.85-0.88
+
+If your baseline AUC is significantly lower than these ranges, 
+debug the training loop before adding quantization/ZK complexity.
+Common causes of low AUC:
+- Learning rate too high or too low
+- Not enough local epochs
+- Data loader returning wrong labels
+- Model not in train mode during training
+- Forgetting to zero gradients
+```
+
+Run the baseline for CheXpert IID first (just 1 seed) and verify the AUC reaches a reasonable value by round 30-40. Only proceed when the baseline works.
+
+---
+
+## STEP 30: Run the FL+DP Baseline
+
+Create `experiments/run_dp_baseline.py`:
+
+```
+Purpose: Run FedAvg WITH Differential Privacy (DP-SGD).
+This produces the "FL + DP (ε=2)" row in Table 1.
+
+Implementation:
+- After local training, before sending updates:
+  1. Clip gradient norm: for each layer, if ||delta|| > C, scale it down
+     delta = delta * min(1, C / ||delta||)
+     Use C = 1.0
+  2. Add Gaussian noise: delta = delta + N(0, σ²)
+     where σ = C * sqrt(2 * ln(1.25/δ)) / ε
+     with ε = 2.0 and δ = 1e-5
+- No quantization, no ZK proofs
+- 3 seeds each, both datasets, both partitions
+
+Expected DP baseline AUC (approximate):
+- CheXpert IID: ~0.78-0.80  (significantly lower due to noise)
+- PTB-XL IID: ~0.82-0.84
+
+The DP baseline SHOULD be noticeably worse than Standard FL.
+This is the key comparison point: TeleZK-FL achieves much better 
+accuracy than DP while providing verifiability.
+```
+
+---
+
+## STEP 31: Run TeleZK-FL Experiments (All 12 Configurations)
+
+Now run the full TeleZK-FL experiments with quantization and ZK proofs enabled.
+
+```bash
+# Run all 12 configurations
+# 2 datasets × 2 partitions × 3 seeds = 12 runs
+python main.py --run-all
+```
+
+If `--run-all` takes too long (each run is 50 rounds), you can run them individually:
+
+```bash
+# CheXpert experiments
+python main.py --config config/chexpert_iid.yaml --seed 42
+python main.py --config config/chexpert_iid.yaml --seed 123
+python main.py --config config/chexpert_iid.yaml --seed 456
+python main.py --config config/chexpert_noniid.yaml --seed 42
+python main.py --config config/chexpert_noniid.yaml --seed 123
+python main.py --config config/chexpert_noniid.yaml --seed 456
+
+# PTB-XL experiments
+python main.py --config config/ptbxl_iid.yaml --seed 42
+python main.py --config config/ptbxl_iid.yaml --seed 123
+python main.py --config config/ptbxl_iid.yaml --seed 456
+python main.py --config config/ptbxl_noniid.yaml --seed 42
+python main.py --config config/ptbxl_noniid.yaml --seed 123
+python main.py --config config/ptbxl_noniid.yaml --seed 456
+```
+
+**Time estimate**: Each CheXpert run takes ~3-6 hours on a GPU (50 rounds × 10 clients × 5 epochs). PTB-XL runs take ~1-2 hours (smaller data). Total: ~30-50 hours of compute across all 12 runs.
+
+**Tip**: Run CheXpert and PTB-XL experiments in parallel on different GPUs if available. Or reduce to 30 rounds first to verify things work, then do the full 50-round runs.
+
+After each run completes, verify the JSON log was saved:
+```bash
+ls -la results/logs/
+```
+
+---
+
+## STEP 32: Run Standalone Benchmarks
+
+```bash
+python main.py --benchmark-only
+```
+
+This runs:
+1. **Latency benchmark**: Proof generation time per layer size (32×32 through 512×512)
+2. **Energy benchmark**: Energy consumption estimates based on measured timing
+3. **Scalability benchmark**: Verification time vs number of clients (10 to 200)
+
+These produce:
+- `results/logs/latency_benchmark.json`
+- `results/logs/energy_benchmark.json`
+- `results/logs/scalability_benchmark.json`
+
+**Important**: These benchmarks should run under RPi4-simulated constraints (4 cores, 4GB RAM). Verify the rpi_simulator is actually applying constraints by checking CPU affinity in the logs.
+
+---
+
+## STEP 33: Collect and Validate Results
+
+Create `experiments/validate_results.py`:
+
+```
+Purpose: Load all experiment logs and validate that results 
+are consistent and within expected ranges.
+
+Checks to perform:
+
+1. ALL 12 FL experiment logs exist
+2. ALL 3 benchmark logs exist
+3. Each FL experiment has exactly 50 rounds logged
+4. TeleZK-FL AUC is within 1% of Standard FL baseline
+   (if the gap is >2%, something is wrong with quantization)
+5. TeleZK-FL AUC is significantly BETTER than FL+DP
+6. Non-IID AUC is lower than IID (expected, by 2-4%)
+7. The gap between Standard FL and TeleZK-FL is similar 
+   in IID and non-IID settings
+8. Per-class AUC values are all >0.7 (no single pathology 
+   should collapse completely)
+9. Proof times show REAL variance (not all identical)
+10. Scalability shows approximately linear growth with K
+
+Print a summary table in the format needed for the paper.
+Flag any anomalies.
+```
+
+Run this and review the output carefully. If any check fails, investigate before generating figures.
+
+---
+
+## STEP 34: Generate All Paper Figures
+
+```bash
+python main.py --generate-figures
+```
+
+This should produce in `results/figures/`:
+
+| Figure | Filename | Used in Paper |
+|--------|----------|---------------|
+| Proof latency (log scale) | `latency_graph.png` + `.pdf` | Figure 3 |
+| Aggregator scalability | `scalability_graph.png` + `.pdf` | Figure 4 |
+| Convergence curves | `convergence_graph.png` + `.pdf` | Figure 5 (NEW) |
+| Non-IID comparison bars | `noniid_comparison.png` + `.pdf` | Figure 6 (NEW) |
+
+**Quality check**: Open each figure and verify:
+- Axis labels are readable (font size ≥ 12pt)
+- Legend doesn't overlap with data
+- Colors are distinguishable in both color and grayscale
+- Error bars/shaded regions are visible
+- DPI is 300 (publication quality)
+
+If any figure needs adjustment, modify `experiments/generate_figures.py` and re-run.
+
+---
+
+## STEP 35: Generate Paper Tables from Results
+
+Create `experiments/generate_tables.py`:
+
+```
+Purpose: Print LaTeX-formatted tables directly from experiment logs.
+These can be copy-pasted into the paper.
+
+Tables to generate:
+
+TABLE 1: Comparison of Diagnostic Accuracy across Datasets (IID)
+- Load baseline, DP baseline, and TeleZK-FL logs (IID only)
+- Compute mean ± std across 3 seeds
+- Format as LaTeX tabular
+
+TABLE 2: Per-Pathology AUC Breakdown on CheXpert (IID)
+- Load CheXpert IID TeleZK-FL logs
+- Extract per-class AUC from final round
+- Compare with baseline
+- Compute delta
+
+TABLE 3: Impact of Quantization Bit-Width
+- This requires separate runs at INT4, INT8, INT16, FP32
+- If not already done, add quick experiments for INT4 and INT16
+
+TABLE 4: Proof Generation Latency per Layer on RPi4
+- Load latency_benchmark.json
+- Format layer dimensions, standard ZK time, TeleZK time, speedup
+- CRITICAL: speedup values will NOT all be 25.0x. Report actual values.
+
+TABLE 5: Diagnostic Accuracy under IID and Non-IID (NEW)
+- Load all experiment logs
+- Show IID vs non-IID for both datasets
+
+TABLE 6: Qualitative Comparison with Existing Frameworks (unchanged)
+- This is manually written, not generated from data
+
+Output: Print each table as LaTeX code ready to paste into the .tex file.
+```
+
+---
+
+## STEP 36: Run Ablation Study (INT4, INT16 variants)
+
+The paper includes Table 2 (ablation on bit-width). You need to run additional experiments for INT4 and INT16 quantization.
+
+Create `experiments/run_ablation.py`:
+
+```
+For each bit-width in [4, 8, 16, 32]:
+    - If 32: this is the Standard FL baseline (already run)
+    - If 8: this is TeleZK-FL (already run)
+    - If 4 or 16: need new runs
+    
+For INT4:
+    - Modify ptq.py to support 4-bit quantization
+    - qmin = -8, qmax = 7 (16 values)
+    - LUT size: 16 × 16 = 256 entries (tiny)
+    - Run CheXpert IID with 1 seed (42) for 50 rounds
+    - Expected: AUC drops significantly (~0.81-0.82)
+
+For INT16:
+    - qmin = -32768, qmax = 32767
+    - LUT would be 65536 × 65536 = 4 billion entries (too large!)
+    - For INT16, skip the LUT approach and use standard arithmetic
+    - The proof time will be much slower than INT8
+    - Run CheXpert IID with 1 seed (42) for 50 rounds
+    - Expected: AUC nearly identical to FP32 (~0.864)
+
+For each bit-width, also measure:
+    - Proof generation time (for the full model)
+    - Memory usage (approximate from tensor sizes)
+
+Save results to results/logs/ablation_{bits}bit.json
+```
+
+---
+
+## STEP 37: Compute Communication Costs
+
+Create `experiments/compute_communication.py`:
+
+```
+Purpose: Calculate exact communication payload sizes for the paper.
+
+For MobileNetV2-2D (CheXpert, ~3.4M params):
+    - FP32: 3.4M × 4 bytes = 13.6 MB per round
+    - INT8:  3.4M × 1 byte  = 3.4 MB per round
+    - Reduction: 75% (4× compression)
+    - ZK proof overhead: measure actual proof size in bytes
+    - Total TeleZK-FL payload: 3.4 MB + proof_size
+
+For MobileNetV2-1D (PTB-XL, ~2.1M params):
+    - FP32: 2.1M × 4 bytes = 8.4 MB per round
+    - INT8:  2.1M × 1 byte  = 2.1 MB per round
+    
+Print results formatted for the paper.
+
+NOTE: The original paper abstract claims "18× communication reduction" 
+but Section 4.5 says "75% reduction" (which is 4×). The actual number 
+is 4× from INT8 vs FP32. Use 75% (4×) consistently — do NOT claim 18×.
+```
+
+---
+
+## STEP 38: Prepare Supplementary Material
+
+Create a `supplementary/` directory with:
+
+```
+supplementary/
+├── S1_convergence_logs.csv      # Per-round AUC for all 12 experiments
+├── S2_per_client_distributions.pdf  # Visualization of data partitions
+├── S3_energy_methodology.md     # How energy was estimated
+├── S4_rpi4_simulation_details.md  # CPU affinity, memory limits, freq scaling
+└── S5_full_results_tables.pdf   # All tables with confidence intervals
+```
+
+### S1: Export convergence logs
+```python
+# For each experiment, export: round, mean_auc, per_class_auc
+# as a CSV file with columns: experiment, seed, round, mean_auc, atel_auc, card_auc, ...
+```
+
+### S2: Per-client data distribution visualization
+```python
+# For each non-IID experiment, create a heatmap showing
+# how many samples of each class each client received.
+# X-axis: Client ID (0-9), Y-axis: Class name, Color: count
+# This shows the Dirichlet heterogeneity visually.
+```
+
+### S3: Energy measurement methodology
+Write a short document explaining:
+- RPi4 Model B power draw specifications (3.0W idle, 7.5W max load)
+- How timing was measured (time.perf_counter under CPU constraints)
+- Energy = measured_power × measured_time
+- Comparison with smartphone battery capacity
+
+### S4: RPi4 simulation methodology
+Write a short document explaining:
+- CPU affinity restriction to 4 cores
+- Memory limit enforcement
+- Frequency scaling factor derivation
+- Why this is a valid approximation
+- Limitations of simulation vs physical hardware
+
+---
+
+## STEP 39: Update LaTeX Paper with Real Numbers
+
+Once all experiments are complete and validated, update the LaTeX manuscript (`TeleZK_FL_Revised.tex`) with the actual measured values.
+
+```
+Files to update:
+1. TeleZK_FL_Revised.tex — replace all placeholder numbers with real ones
+
+Specific replacements needed:
+
+ABSTRACT:
+- Replace "0.862" with actual CheXpert IID mean AUC
+- Replace "0.891" with actual PTB-XL IID mean AUC  
+- Replace "0.865" and "0.894" with actual baseline AUCs
+- Replace "52×" with actual end-to-end speedup
+- Replace "75%" with actual communication reduction
+
+TABLE 1 (Accuracy comparison):
+- Replace all AUC values with measured mean ± std
+
+TABLE 2 (Per-pathology AUC):
+- Replace with actual per-class values from final round
+
+TABLE 3 (Non-IID results):
+- Replace with actual IID vs non-IID measured values
+
+TABLE 4 (Ablation study):
+- Replace with actual INT4/INT8/INT16/FP32 results
+
+TABLE 5 (Proof latency):
+- Replace with REAL measured times per layer
+- Speedup column will show REAL ratios (not uniform 25.0×)
+
+SECTION 4.3 (Proof Generation Latency):
+- Update the "52× speedup" claim with actual measured value
+- Explain the difference between per-layer and end-to-end speedup
+
+SECTION 4.4 (Energy):
+- Update with actual measured energy values
+- Include measurement methodology description
+
+SECTION 4.5 (Communication):
+- Fix to use consistent "75% reduction" or "4× compression"
+- Remove the "18×" claim from the abstract if it was there
+
+FIGURES:
+- Replace latency_graph.png with the one from results/figures/
+- Replace scalability_graph.png with the one from results/figures/
+- Add convergence_graph.png (new Figure 5)
+- Add noniid_comparison.png (new Figure 6, optional)
+```
+
+---
+
+## STEP 40: Final Validation Checklist
+
+Before submitting the revised paper, verify everything:
+
+```
+CONSISTENCY CHECKS:
+□ Abstract numbers match Results section numbers exactly
+□ Table 1 AUC values match what's stated in text
+□ "52× speedup" (or whatever the real number is) is consistent 
+  everywhere: abstract, results, conclusion
+□ Communication reduction percentage is consistent everywhere
+□ Per-layer speedup in Table 5 × explanation = end-to-end speedup
+□ Energy numbers are consistent between Section 4.4 and abstract
+□ Number of rounds (50) matches config and text
+□ Number of clients (10) matches config and text
+□ Dirichlet alpha (0.5) matches config and text
+
+FIGURE CHECKS:
+□ All figures are ≥300 DPI
+□ Figure captions match the actual content
+□ Convergence graph shows all 3 frameworks
+□ Latency graph Y-axis is log scale
+□ Scalability graph shows linear trend
+
+REPRODUCIBILITY CHECKS:
+□ GitHub repo has all code needed to reproduce results
+□ requirements.txt is up to date
+□ README has clear instructions
+□ Config files match what was used in experiments
+□ Random seeds are documented
+□ Dataset download links are correct
+
+FORMATTING CHECKS:
+□ Line numbers are enabled (\linenumbers)
+□ Word count and figure count on page 1
+□ Abbreviations list present
+□ Ethics statement present
+□ Acknowledgments present
+□ All sections match Frontiers Original Research format
+□ References use Vancouver (numbered) style
+```
+
+---
+
+## EXECUTION TIMELINE
+
+| Week | Steps | What Happens |
+|------|-------|-------------|
+| Week 1 | 27-28 | Smoke tests, fix all runtime issues |
+| Week 1 | 29-30 | Run Standard FL and DP baselines |
+| Week 2 | 31 | Run all 12 TeleZK-FL experiments |
+| Week 2 | 32 | Run standalone benchmarks |
+| Week 3 | 33-36 | Validate results, generate figures, run ablation |
+| Week 3 | 37-38 | Communication costs, supplementary material |
+| Week 4 | 39-40 | Update LaTeX paper, final validation |
+| Week 5 | — | Submit revised manuscript through Frontiers Review Forum |
+
+**Buffer**: This gives you 4-5 weeks of buffer before the June 30 deadline.
+
+---
+
+## IF THINGS GO WRONG
+
+### "CheXpert training doesn't converge"
+- Try learning rate 3e-4 instead of 1e-4
+- Use pretrained=True (ImageNet weights)
+- Verify labels are correct (print first 10 samples)
+- Try training centrally first (no FL) to establish ceiling
+
+### "PTB-XL AUC is very low (<0.80)"
+- Check signal normalization (zero mean, unit variance per lead)
+- Verify label mapping from SCP codes to superclasses
+- Try learning rate 5e-4
+- Train centrally first to debug the 1D model
+
+### "Proof generation is too slow even for INT8"
+- Reduce the number of operations checked (sample instead of checking all)
+- Optimize the LUT lookup (use a Python dict/set, not list search)
+- Profile with cProfile to find bottlenecks
+
+### "Out of memory during FL training"
+- Reduce batch_size to 16 or 8
+- Use gradient accumulation over 2-4 mini-batches
+- Reduce number of simultaneous clients in memory (serialize instead of parallel)
+
+### "Results don't match paper's original claims"
+- This is EXPECTED. The original paper used formula-derived numbers.
+- Real numbers will differ. That's fine — report what you actually measure.
+- The story (TeleZK-FL is much faster than standard ZK with minimal accuracy loss) should still hold.
+- Update ALL numbers in the paper to match reality.
