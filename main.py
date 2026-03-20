@@ -1,85 +1,85 @@
-import torch
-import numpy as np
-from src.data.health_data import HealthDataGenerator, get_dataloader
-from src.fl.client import FLClient, SimpleModel
-from src.fl.server import FLServer
-from src.zkp.lut_zkp import LUTZKPSimulator
-from src.utils.benchmarks import BenchmarkSuite
-import warnings
+"""
+TeleZK-FL: Enabling Trustless and Verifiable Remote Patient Monitoring
+via Quantized Zero-Knowledge Federated Learning
 
-warnings.filterwarnings("ignore")
+Usage:
+    python main.py --config config/chexpert_iid.yaml
+    python main.py --config config/chexpert_iid.yaml --mode baseline
+    python main.py --config config/chexpert_iid.yaml --mode dp
+    python main.py --run-all
+    python main.py --benchmark-only
+    python main.py --generate-figures
+    python main.py --generate-tables
+    python main.py --run-ablation
+    python main.py --validate
+    python main.py --comm-costs
+"""
+import argparse
+from src.fl.trainer import run_federated_experiment, run_all_experiments
+from experiments.exp_latency_real import run_latency_benchmark
+from experiments.exp_energy_real import run_energy_benchmark
+from experiments.exp_scalability_real import run_scalability_benchmark
+from experiments.generate_figures import generate_all_figures
 
-def run_simulation():
-    # init sim
-    print("Setting up TeleZK-FL Simulation...")
-    num_clients = 3
-    num_rounds = 5
-    num_features = 5
-    
-    data_gen = HealthDataGenerator(num_samples=200, num_features=num_features)
-    global_model = SimpleModel(input_dim=num_features)
-    server = FLServer(global_model)
-    zkp_sim = LUTZKPSimulator()
-    benchmarks = BenchmarkSuite()
-    
-    # federated learning loop
-    for r in range(num_rounds):
-        print(f"\n--- Round {r+1}/{num_rounds} ---")
-        client_updates = []
-        client_scales = []
-        client_zero_points = []
-        client_proofs = []
-        
-        for c in range(num_clients):
-            # gen local data
-            # FIXME: memory leak here for large num_samples?
-            X, y = data_gen.generate_data()
-            loader = get_dataloader(X, y, batch_size=32)
-            
-            # Create client with current global weights
-            client = FLClient(c, loader, model=SimpleModel(input_dim=num_features))
-            client.model.load_state_dict(server.get_model().state_dict())
-            
-            # local training
-            _ = client.train(epochs=1)
-            
-            # get quant updates & proof
-            updates, scales, zero_points = client.get_updates()
-            proof = client.generate_proof()
-            
-            client_updates.append(updates)
-            client_scales.append(scales)
-            client_zero_points.append(zero_points)
-            client_proofs.append(proof)
-            print(f"  Client {c} trained and quantized INT8 updates.")
-            
-        # Server Aggregation
-        if server.verify_proofs(client_proofs):
-            server.aggregate(client_updates, client_scales, client_zero_points)
-            print("  Server verified proofs and aggregated updates.")
-        else:
-            print("  Server failed to verify ZK proofs!")
 
-    # run benchmarks
-    print("\nRunning ZK Performance Benchmarks...")
-    # Calculate model size (number of parameters)
-    model_params = sum(p.numel() for p in global_model.parameters())
-    zk_results = zkp_sim.get_benchmarks(model_params)
-    
-    # save results
-    benchmarks.record("Model Parameters", model_params)
-    benchmarks.record("Quantization", "INT8")
-    benchmarks.record("ZK Speedup (Target)", zk_results["speedup"], "x")
-    benchmarks.record("Energy Reduction (Target)", zk_results["energy_reduction"], "x")
-    benchmarks.record("Standard Proof Latency", zk_results["standard_time"], "s")
-    benchmarks.record("TeleZK-FL Proof Latency", zk_results["lut_time"], "s")
-    benchmarks.record("Standard Proof Energy", zk_results["standard_energy"], "J")
-    benchmarks.record("TeleZK-FL Proof Energy", zk_results["lut_energy"], "J")
-    
-    # Print Output
-    benchmarks.display_results()
-    
-    print("\nSimulation Complete. Results mirror the performance claims of TeleZK-FL.")
+def main():
+    parser = argparse.ArgumentParser(description="TeleZK-FL v2")
+    parser.add_argument("--config", type=str, help="Path to config YAML")
+    parser.add_argument("--mode", choices=["telezk", "baseline", "dp"],
+                        default="telezk",
+                        help="Experiment mode: telezk (default), baseline, dp")
+    parser.add_argument("--run-all", action="store_true",
+                        help="Run all 12 TeleZK-FL experiment configurations")
+    parser.add_argument("--run-baselines", action="store_true",
+                        help="Run all Standard FL baseline experiments")
+    parser.add_argument("--run-dp", action="store_true",
+                        help="Run all FL+DP baseline experiments")
+    parser.add_argument("--benchmark-only", action="store_true",
+                        help="Run only latency/energy/scalability benchmarks")
+    parser.add_argument("--generate-figures", action="store_true",
+                        help="Generate paper figures from logged results")
+    parser.add_argument("--generate-tables", action="store_true",
+                        help="Generate LaTeX tables from logged results")
+    parser.add_argument("--run-ablation", action="store_true",
+                        help="Run ablation study (INT4/8/16/32)")
+    parser.add_argument("--validate", action="store_true",
+                        help="Validate all experiment results")
+    parser.add_argument("--comm-costs", action="store_true",
+                        help="Compute communication costs")
+    parser.add_argument("--seed", type=int, default=42)
+    args = parser.parse_args()
+
+    if args.run_all:
+        run_all_experiments()
+    elif args.run_baselines:
+        from experiments.run_baseline import run_all_baselines
+        run_all_baselines()
+    elif args.run_dp:
+        from experiments.run_dp_baseline import run_all_dp
+        run_all_dp()
+    elif args.benchmark_only:
+        run_latency_benchmark()
+        run_energy_benchmark()
+        run_scalability_benchmark()
+    elif args.generate_figures:
+        generate_all_figures()
+    elif args.generate_tables:
+        from experiments.generate_tables import generate_all_tables
+        generate_all_tables()
+    elif args.run_ablation:
+        from experiments.run_ablation import run_ablation
+        run_ablation()
+    elif args.validate:
+        from experiments.validate_results import validate_results
+        validate_results()
+    elif args.comm_costs:
+        from experiments.compute_communication import compute_communication
+        compute_communication()
+    elif args.config:
+        run_federated_experiment(args.config, seed_override=args.seed, mode=args.mode)
+    else:
+        parser.print_help()
+
 
 if __name__ == "__main__":
-    run_simulation()
+    main()
