@@ -117,6 +117,13 @@ def run_federated_experiment(
     print(f"{mode_label} Experiment: {dataset_name} / {partition_type} / seed={seed}")
     print(f"{'='*60}")
 
+    # Detect device early — CUDA should be used for all training
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"\n  [DEVICE] torch.cuda.is_available() = {torch.cuda.is_available()}")
+    print(f"  [DEVICE] Using: {device}")
+    if torch.cuda.is_available():
+        print(f"  [DEVICE] GPU: {torch.cuda.get_device_name(0)}")
+
     # 2-3. Load dataset
     print("\nLoading dataset...")
     if dataset_name == "chexpert":
@@ -193,6 +200,9 @@ def run_federated_experiment(
     # 9. Initialize server (verifier may be None for baseline/dp modes)
     server = FLServer(global_model, verifier)
 
+    # Move global model to GPU for training
+    global_model.to(device)
+
     # 10. Create clients
     print(f"\nCreating {num_clients} FL clients...")
     clients = []
@@ -206,16 +216,11 @@ def run_federated_experiment(
         clients.append(client)
         print(f"  Client {k}: {client.num_samples} samples")
 
-    # 11. Initialize logger and RPi4 simulator
+    # 11. Initialize logger
+    # NOTE: RPi4 simulator is NOT used during FL training.
+    # It caused CPU affinity restrictions. Use it only for --benchmark-only.
     logger = ExperimentLogger(config)
-    hw_config = config.get("hardware", {})
-    rpi_sim = None
-    if hw_config.get("simulate_rpi4", False):
-        rpi_sim = RPi4Simulator(
-            num_cores=hw_config.get("num_cores", 4),
-            memory_limit_gb=hw_config.get("memory_limit_gb", 4),
-            freq_scale_factor=hw_config.get("freq_scale_factor", None),
-        )
+    rpi_sim = None  # disabled during training on purpose
 
     # 12. Federated training loop
     print(f"\nStarting FL training for {num_rounds} rounds...")
