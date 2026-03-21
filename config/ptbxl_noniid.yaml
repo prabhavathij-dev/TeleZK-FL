@@ -19,9 +19,9 @@ model:
   num_params_approx: 2100000
 
 federated:
-  num_clients: 10
-  num_rounds: 20
-  local_epochs: 5
+  num_clients: 5
+  num_rounds: 50
+  local_epochs: 10
   participation_rate: 1.0
   partition: dirichlet
   dirichlet_alpha: 0.5
@@ -29,7 +29,7 @@ federated:
 
 training:
   optimizer: adam
-  learning_rate: 0.001  # higher LR needed — no pretrained weights for PTB-XL
+  learning_rate: 0.003
   batch_size: 32
   loss: bce
 

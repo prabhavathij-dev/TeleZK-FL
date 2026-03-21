@@ -64,16 +64,29 @@ def _apply_dp_noise(
         Noised delta dict.
     """
     noised = {}
-    for name, tensor in delta.items():
-        # Clip: if ||delta|| > C, scale it down
-        norm = tensor.norm(2).item()
-        if norm > clip_norm:
-            tensor = tensor * (clip_norm / norm)
 
-        # Add Gaussian noise: sigma = C * sqrt(2 * ln(1.25/delta)) / epsilon
-        sigma = clip_norm * math.sqrt(2 * math.log(1.25 / delta_dp)) / epsilon
+    # Calculate global norm across all layers
+    global_norm = 0.0
+    for tensor in delta.values():
+        global_norm += tensor.norm(2).item() ** 2
+    global_norm = math.sqrt(global_norm)
+
+    # Calculate clipping factor
+    clip_factor = min(1.0, clip_norm / max(global_norm, 1e-12))
+
+    # Calculate noise scale sigma
+    sigma = clip_norm * math.sqrt(2 * math.log(1.25 / delta_dp)) / epsilon
+    
+    # Enable debugging print only theoretically for one client to trace
+    # but since trainer doesn't have client IDs here easily, print normally
+    print(f"      [DP] Global Norm: {global_norm:.4f} -> Clip Factor: {clip_factor:.4f} | Sigma: {sigma:.2f}")
+
+    for name, tensor in delta.items():
+        # Clip gradient
+        clipped_tensor = tensor * clip_factor
+        # Add Gaussian noise
         noise = torch.randn_like(tensor) * sigma
-        noised[name] = tensor + noise
+        noised[name] = clipped_tensor + noise
 
     return noised
 
