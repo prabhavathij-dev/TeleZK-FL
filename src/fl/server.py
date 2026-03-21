@@ -91,6 +91,7 @@ class FLServer:
         # Step 3: Weighted FedAvg aggregation
         total_samples = sum(valid_sizes)
         global_state = self.global_model.state_dict()
+        device = next(self.global_model.parameters()).device
 
         for name in dequantized_updates[0]:
             if name in global_state:
@@ -98,7 +99,7 @@ class FLServer:
                 for update, n_k in zip(dequantized_updates, valid_sizes):
                     if name in update:
                         weight = n_k / total_samples
-                        weighted_sum += weight * update[name]
+                        weighted_sum += weight * update[name].to(device)
 
                 global_state[name] = global_state[name].float() + weighted_sum
 
