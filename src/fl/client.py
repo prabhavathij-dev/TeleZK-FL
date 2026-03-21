@@ -46,10 +46,11 @@ class FLClient:
             batch_size=batch_size,
             shuffle=True,
             drop_last=False,
-            num_workers=0,  # keep it simple for RPi4 simulation
+            num_workers=0,
         )
 
-        self.device = "cpu"  # RPi4 doesn't have GPU
+        # Use GPU if available — RPi4 comment left for reference only
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def train_local(
         self,
@@ -65,21 +66,25 @@ class FLClient:
         Returns:
             Dict of {layer_name: delta_tensor} weight updates.
         """
-        # Load global weights
+        # Load global weights then move to device BEFORE snapshotting initial weights.
+        # CRITICAL: snapshot AFTER .to(device) so delta computation stays on same device.
         self.model.load_state_dict(global_weights)
         self.model.to(self.device)
         self.model.train()
 
-        # Save initial weights for delta computation
+        # Snapshot initial weights (already on correct device)
         initial_weights = {
             name: param.data.clone()
             for name, param in self.model.named_parameters()
         }
 
         # Setup optimizer and loss
-        lr = self.config.get("training", {}).get("learning_rate", 0.0001)
+        lr = self.config.get("training", {}).get("learning_rate", 0.001)
+        criterion = nn.BCELoss()  # models output Sigmoid, so BCELoss is correct
         optimizer = optim.Adam(self.model.parameters(), lr=lr)
-        criterion = nn.BCELoss()
+
+        if self.client_id == 0:
+            print(f"\n  [Client 0] device={self.device}, lr={lr}")
 
         # Training loop
         for epoch in range(local_epochs):
@@ -88,7 +93,7 @@ class FLClient:
 
             for data, target in self.dataloader:
                 data = data.to(self.device)
-                target = target.to(self.device)
+                target = target.float().to(self.device)  # ensure float32
 
                 optimizer.zero_grad()
                 try:
@@ -102,11 +107,15 @@ class FLClient:
                     print(f"  Client {self.client_id}: Batch error: {e}")
                     continue
 
-        # Compute weight deltas
+            if self.client_id == 0 and num_batches > 0:
+                avg_loss = epoch_loss / num_batches
+                print(f"  [Client 0] Epoch {epoch+1}/{local_epochs} loss={avg_loss:.4f}")
+
+        # Compute weight deltas (ensure they're on CPU for quantization)
         delta = {}
         for name, param in self.model.named_parameters():
             if name in initial_weights:
-                delta[name] = param.data - initial_weights[name]
+                delta[name] = (param.data - initial_weights[name]).cpu()
 
         return delta
 

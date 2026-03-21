@@ -20,7 +20,7 @@ model:
 
 federated:
   num_clients: 10
-  num_rounds: 50
+  num_rounds: 20
   local_epochs: 5
   participation_rate: 1.0
   partition: dirichlet
@@ -29,7 +29,7 @@ federated:
 
 training:
   optimizer: adam
-  learning_rate: 0.0001
+  learning_rate: 0.001  # higher LR needed — no pretrained weights for PTB-XL
   batch_size: 32
   loss: bce
 

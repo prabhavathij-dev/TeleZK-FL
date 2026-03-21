@@ -115,18 +115,17 @@ class FLServer:
         self,
         test_loader: DataLoader,
         class_names: List[str],
-        device: str = "cpu",
     ) -> Tuple[Dict[str, float], float]:
         """Evaluate the global model on the test set.
 
         Args:
             test_loader: DataLoader for test data.
             class_names: List of class names for AUC reporting.
-            device: Computation device.
 
         Returns:
             Tuple of (per_class_auc dict, mean_auc).
         """
+        device = "cuda" if torch.cuda.is_available() else "cpu"
         self.global_model.to(device)
         return compute_auc_per_class(
             self.global_model, test_loader, class_names, device
